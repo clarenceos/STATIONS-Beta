@@ -1881,6 +1881,49 @@ function showAboutModal() {
   </div>`);
 }
 
+function showWhatsNewModal() {
+  const CURRENT_VERSION = 'v3.6.4';
+  DB.put('settings', { id: 'whats-new-seen', version: CURRENT_VERSION });
+
+  showModal(`
+  <div style="padding:4px 0 8px;">
+    <div style="font-family:'Barlow Condensed',sans-serif;font-weight:500;font-size:9px;text-transform:uppercase;letter-spacing:0.34em;color:var(--bronze);margin-bottom:4px;">STATIONS ${CURRENT_VERSION}</div>
+    <div style="font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:26px;text-transform:uppercase;color:var(--text-hi);margin-bottom:4px;">What's New</div>
+    <div style="height:1px;background:linear-gradient(90deg,var(--bronze) 0%,var(--bronze-dim) 40%,transparent 80%);margin-bottom:20px;"></div>
+
+    <div style="display:flex;flex-direction:column;gap:16px;font-family:'DM Sans',sans-serif;font-size:14px;color:var(--text-mid);line-height:1.5;">
+
+      <div>
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;color:var(--text-hi);margin-bottom:3px;">⚡ Tabata + HIIT Timers</div>
+        <div>Two new formats. Simple mode is a pure timer — no setup, just go. Advanced mode uses saved blocks and logs every session to history with real lap timing.</div>
+      </div>
+
+      <div>
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;color:var(--text-hi);margin-bottom:3px;">🧱 Block Builder</div>
+        <div>Build reusable 8-exercise Tabata blocks in the Exercise Builder. Drop any block into a Standard WOD as a station — it runs automatically when you LAP into it.</div>
+      </div>
+
+      <div>
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;color:var(--text-hi);margin-bottom:3px;">⏱ EMOM</div>
+        <div>Every Minute On the Minute. Set your interval and rounds — the clock handles the rest. Auto-advances each minute.</div>
+      </div>
+
+      <div>
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;color:var(--text-hi);margin-bottom:3px;">🔗 Complex Builder Upgraded</div>
+        <div>Pick exercises from your library instead of typing names. Weight per movement. Search and filter by equipment.</div>
+      </div>
+
+      <div>
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;color:var(--text-hi);margin-bottom:3px;">📊 Session History</div>
+        <div>Tabata and HIIT sessions save to history with real lap timing. Block rest periods show as separate rows.</div>
+      </div>
+
+    </div>
+
+    <button class="btn-primary btn-full" onclick="hideModal()" style="margin-top:24px;">Let's go</button>
+  </div>`);
+}
+
 // ============================================================
 // EXERCISE BUILDER SCREEN
 // ============================================================
@@ -4805,6 +4848,7 @@ function renderTabataHiitScreen() {
     </div>
 
     <div class="timer-content" id="th-content" style="flex:1;overflow:hidden;display:flex;flex-direction:column;">
+      ${th.embeddedInStandard ? `<div style="font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:11px;text-transform:uppercase;letter-spacing:0.2em;color:var(--yellow);margin-bottom:3px;padding-left:2px;">⚡ TABATA BLOCK</div>` : ''}
       <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:12px;text-transform:uppercase;color:var(--text-mid);letter-spacing:0.08em;margin-bottom:6px;padding-left:2px;">${progressLine}</div>
       <div class="now-card">
         <div class="now-overline" style="color:${phaseColor};">${phaseLabel}</div>
@@ -4829,6 +4873,7 @@ function renderTabataHiitScreen() {
         <div class="next-overline">Next Up</div>
         <div class="next-name">${esc((getTabataHiitNextLabel() || '').toUpperCase())}</div>
       </div>` : ''}
+      ${th.embeddedInStandard ? `<div style="font-family:'DM Sans',sans-serif;font-size:11px;color:var(--text-xlo);text-align:center;margin-top:8px;padding:0 16px;">LAP is disabled during Tabata Blocks · press › to advance</div>` : ''}
     </div>
 
     <div class="timer-lap-bar">
@@ -5110,6 +5155,13 @@ function startTimer() {
     t.intervalEndMs = performance.now() + (t.emomDuration * 1000);
   }
   reqWakeLock();
+  // Check if first station is a Tabata Block
+  const firstSt = t.stations[0];
+  if (firstSt && firstSt.type === 'tabataBlock') {
+    renderTimerScreen();
+    startEmbeddedTabataBlock(firstSt);
+    return;
+  }
   renderTimerScreen();
   t.rafId = requestAnimationFrame(timerTick);
 }
@@ -5423,7 +5475,7 @@ function returnToStandardTimer(blockDurationMs) {
 
   // Record the Tabata Block as a lap in the Standard session
   const st = t.stations[t.stationIdx];
-  const blockName = st?.tabataBlockName || 'Tabata Block';
+  const blockName = (st?.tabataBlockName || 'Tabata Block') + ' (TABATA)';
   t.laps.push({
     lapNumber: t.currentLapNumber,
     type: 'exercise',
@@ -6379,7 +6431,7 @@ async function renderSettings() {
   <div class="card" style="margin-top:12px;">
     <div class="settings-row">
       <div class="settings-label">App Version</div>
-      <div style="color:var(--text-lo);font-size:14px;">STATIONS v3.6.4</div>
+      <div style="color:var(--text-lo);font-size:14px;">STATIONS v3.6.5</div>
     </div>
   </div>
 
@@ -6859,6 +6911,12 @@ async function init() {
     }
     await renderHome();
     showScreen('home');
+    // What's New modal — show once per version
+    const CURRENT_VERSION = 'v3.6.4';
+    const seenEntry = await DB.get('settings', 'whats-new-seen');
+    if (!seenEntry || seenEntry.version !== CURRENT_VERSION) {
+      setTimeout(() => showWhatsNewModal(), 600);
+    }
     document.addEventListener('touchstart', () => {
       getACtx();
       if (window.speechSynthesis && S.settings.voiceMode !== 'none') {
