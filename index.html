@@ -1008,7 +1008,9 @@ const S = {
     halfFired: false,
     fiveCountFired: 0,
     phaseLapLog: [],
-    currentPhaseStartMs: 0
+    currentPhaseStartMs: 0,
+    embeddedInStandard: false,
+    embeddedBlockStartMs: 0
   }
 };
 
@@ -2269,9 +2271,21 @@ function renderComplexEditor() {
   </div>`;
 }
 
-async function openComplexMovementPicker(movIdx) {
-  const exercises = await DB.all('exercises');
-  const usable = exercises.filter(e => e.equipment !== 'cardio' && e.equipment !== 'interval');
+let _complexPickerFilter = 'all';
+let _complexPickerSearch = '';
+
+async function openComplexMovementPicker(movIdx, filter, search) {
+  _complexPickerFilter = filter !== undefined ? filter : (_complexPickerFilter || 'all');
+  _complexPickerSearch = search !== undefined ? search : (_complexPickerSearch || '');
+
+  const allExercises = await DB.all('exercises');
+  let usable = allExercises.filter(e => e.equipment !== 'cardio' && e.equipment !== 'interval');
+
+  if (_complexPickerFilter !== 'all') {
+    usable = usable.filter(e => e.equipment === _complexPickerFilter);
+  }
+  const q = _complexPickerSearch.toLowerCase().trim();
+  if (q) usable = usable.filter(e => e.name.toLowerCase().includes(q));
 
   const now = Date.now();
   const oneDayMs = 24 * 60 * 60 * 1000;
@@ -2300,12 +2314,20 @@ async function openComplexMovementPicker(movIdx) {
     ? `<div style="text-align:center;padding:20px;color:var(--text-lo);font-family:'DM Sans',sans-serif;font-size:13px;">No exercises found</div>`
     : buildSect('Recently Used', recentlyUsed) + buildSect('Frequently Used', frequentlyUsed) + buildSect('All Exercises', alphabetical);
 
+  const equipments = ['all', 'kettlebell', 'dumbbell', 'barbell', 'bodyweight', 'medicine_ball', 'sandbag', 'trx'];
+  const pillsHtml = equipments.map(eq =>
+    `<div class="pill ${_complexPickerFilter === eq ? 'active' : ''}" onclick="openComplexMovementPicker(${movIdx},'${eq}',document.getElementById('cx-picker-search')?.value||'')" style="font-size:11px;padding:3px 8px;">${eq === 'all' ? 'All' : eqLabel(eq)}</div>`
+  ).join('');
+
   showModal(`
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
     <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:18px;text-transform:uppercase;">Movement ${movIdx + 1}</div>
-    <button class="btn-ghost btn-sm" onclick="hideModal()" style="min-width:36px;width:36px;padding:0;">✕</button>
+    <button class="btn-ghost btn-sm" onclick="hideModal();_complexPickerFilter='all';_complexPickerSearch='';" style="min-width:36px;width:36px;padding:0;">✕</button>
   </div>
-  <div style="max-height:65vh;overflow-y:auto;">${listHtml}</div>`);
+  <input type="text" id="cx-picker-search" value="${esc(_complexPickerSearch)}" placeholder="Search exercises..."
+    style="margin-bottom:8px;" oninput="openComplexMovementPicker(${movIdx},'${_complexPickerFilter}',this.value)" onfocus="this.select()"/>
+  <div class="pill-row" style="flex-wrap:wrap;margin-bottom:6px;">${pillsHtml}</div>
+  <div style="max-height:50vh;overflow-y:auto;">${listHtml}</div>`);
 }
 
 function selectComplexMovementExercise(movIdx, exerciseId) {
@@ -2314,6 +2336,8 @@ function selectComplexMovementExercise(movIdx, exerciseId) {
   if (!mov) return;
   mov.exerciseId = exerciseId;
   mov.weight = mov.weight || 0;
+  _complexPickerFilter = 'all';
+  _complexPickerSearch = '';
   hideModal();
   DB.get('exercises', exerciseId).then(ex => {
     if (ex && S._editingComplex?.movements[movIdx]) {
@@ -4549,6 +4573,18 @@ function advanceTabataHiitPhase() {
 
 function endTabataHiitWorkout() {
   const th = S.tabataHiit;
+
+  // Embedded in Standard session — return control instead of showing complete modal
+  if (th.embeddedInStandard) {
+    th.active = false;
+    cancelAnimationFrame(th.rafId);
+    if (S.settings.voiceMode !== 'none') speak('Block complete');
+    beep(880, 0.15, 0.8);
+    const blockDurationMs = performance.now() - th.embeddedBlockStartMs;
+    setTimeout(() => returnToStandardTimer(blockDurationMs), 400);
+    return;
+  }
+
   if (S.settings.voiceMode !== 'none') {
     const nowMs = performance.now();
     const wallMs = nowMs - th.startMs;
@@ -5204,6 +5240,8 @@ function resumeTimer() {
 
 function pressLap(autoLap = false, isEmomCall = false) {
   const t = S.timer;
+  // Block LAP during embedded Tabata block
+  if (S.tabataHiit.embeddedInStandard) return;
   if (!t.active || t.paused || t.lapLocked) return;
   const nowMs = performance.now();
   const finalSegMs = nowMs - t.stationSegmentStartMs;
@@ -5295,13 +5333,143 @@ function pressLap(autoLap = false, isEmomCall = false) {
     t.amrapTenFired = false;
     t.amrapCountdownFired = 0;
 
-    if (isIntervalStation(t.stations[t.stationIdx], t.exercises)) {
-      t.intervalEndMs = performance.now() + getIntervalDuration(t.stations[t.stationIdx]);
+    const nextSt = t.stations[t.stationIdx];
+
+    // Tabata Block station — hand off to Tabata engine
+    if (nextSt && nextSt.type === 'tabataBlock') {
+      cancelAnimationFrame(t.rafId);
+      renderTimerScreen();
+      startEmbeddedTabataBlock(nextSt);
+      return;
     }
 
-    const nextSt = t.stations[t.stationIdx];
-    speakStation(nextSt, t.exercises, t.complexes);
+    if (isIntervalStation(nextSt, t.exercises)) {
+      t.intervalEndMs = performance.now() + getIntervalDuration(nextSt);
+    }
 
+    speakStation(nextSt, t.exercises, t.complexes);
+    renderTimerScreen();
+    t.rafId = requestAnimationFrame(timerTick);
+  }
+}
+
+async function startEmbeddedTabataBlock(st) {
+  const t = S.timer;
+  const th = S.tabataHiit;
+
+  // Set embedded flag immediately to block any stray LAP taps during async load
+  th.embeddedInStandard = true;
+  th.embeddedBlockStartMs = performance.now();
+
+  // Load block from IndexedDB
+  const blk = await DB.get('tabataBlocks', st.tabataBlockId);
+  if (!blk) {
+    // Block not found — skip station and return to Standard
+    th.embeddedInStandard = false;
+    toast('Tabata Block not found — skipping');
+    t.stationSegmentStartMs = performance.now();
+    renderTimerScreen();
+    t.rafId = requestAnimationFrame(timerTick);
+    return;
+  }
+
+  // Load exercise data for all slots
+  const allExercises = await DB.all('exercises');
+  const loadedBlk = JSON.parse(JSON.stringify(blk));
+  for (const slot of loadedBlk.slots) {
+    slot._exercise = slot.exerciseId ? allExercises.find(e => e.id === slot.exerciseId) : null;
+  }
+
+  // Reset Tabata engine state for this embedded block
+  th.mode = 'tabata-advanced';
+  th.active = false;
+  th.paused = false;
+  th.startMs = 0;
+  th.totalPausedMs = 0;
+  th.pauseStartMs = 0;
+  th.sessionId = null;           // No separate session — part of Standard session
+  th.wod = null;
+  th.blocks = [loadedBlk];
+  th.blockIdx = 0;
+  th.slotIdx = 0;
+  th.warmupDuration = 0;         // No warmup/cooldown inside embedded block
+  th.cooldownDuration = 0;
+  th.blockRestDuration = 0;
+  th.workDuration = 20;
+  th.restDuration = 10;
+  th.currentRound = 1;
+  th.totalRounds = 1;            // One block only
+  th.halfFired = false;
+  th.fiveCountFired = 0;
+  th.phaseLapLog = [];
+  th.currentPhaseStartMs = 0;
+  // embeddedInStandard stays true
+
+  if (S.settings.voiceMode !== 'none') speak(speakify(st.tabataBlockName || 'Tabata Block'));
+
+  startTabataHiitPhase('work', 20);
+}
+
+function returnToStandardTimer(blockDurationMs) {
+  const t = S.timer;
+  const th = S.tabataHiit;
+
+  // Clear embedded state
+  th.embeddedInStandard = false;
+  th.embeddedBlockStartMs = 0;
+  th.active = false;
+  cancelAnimationFrame(th.rafId);
+  relWakeLock();
+
+  // Record the Tabata Block as a lap in the Standard session
+  const st = t.stations[t.stationIdx];
+  const blockName = st?.tabataBlockName || 'Tabata Block';
+  t.laps.push({
+    lapNumber: t.currentLapNumber,
+    type: 'exercise',
+    label: blockName,
+    duration: blockDurationMs / 1000,
+    continued: false,
+    startTime: t.stationSegmentStartOffset || 0
+  });
+  t.completedStationTimes.push(blockDurationMs);
+  t.currentLapNumber++;
+  t.canUndo = false;             // No undo after embedded block
+
+  // Resume Standard timer
+  reqWakeLock();
+
+  if (t.stationIdx >= t.stations.length - 1) {
+    // Block was the last station — complete the session
+    t.active = false;
+    t.lapLocked = true;
+    setTimeout(() => { t.lapLocked = false; }, 1000);
+    relWakeLock();
+    setTimeout(() => showWorkoutCompleteModal(), 350);
+  } else {
+    // Advance to next station
+    t.stationIdx++;
+    t.stationSegmentStartMs = performance.now();
+    t.stationSegmentStartOffset = performance.now() - t.startMs;
+    t.intervalEndMs = 0;
+    t.intervalRemaining = 0;
+    t.amrapHalfFired = false;
+    t.amrapTenFired = false;
+    t.amrapCountdownFired = 0;
+
+    const nextSt = t.stations[t.stationIdx];
+
+    // Handle chained Tabata Blocks
+    if (nextSt && nextSt.type === 'tabataBlock') {
+      renderTimerScreen();
+      startEmbeddedTabataBlock(nextSt);
+      return;
+    }
+
+    if (isIntervalStation(nextSt, t.exercises)) {
+      t.intervalEndMs = performance.now() + getIntervalDuration(nextSt);
+    }
+    speakStation(nextSt, t.exercises, t.complexes);
     renderTimerScreen();
     t.rafId = requestAnimationFrame(timerTick);
   }
@@ -6211,7 +6379,7 @@ async function renderSettings() {
   <div class="card" style="margin-top:12px;">
     <div class="settings-row">
       <div class="settings-label">App Version</div>
-      <div style="color:var(--text-lo);font-size:14px;">STATIONS v3.6.3</div>
+      <div style="color:var(--text-lo);font-size:14px;">STATIONS v3.6.4</div>
     </div>
   </div>
 
