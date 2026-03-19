@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-5K9JXDE9K7"></script>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-5K9JXDE9K7');</script>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
@@ -1857,7 +1859,7 @@ async function renderHome() {
 }
 
 function showAboutModal() {
-  const version = 'v3.5.2';
+  const version = 'v3.6.5';
   showModal(`
   <div style="text-align:center;padding:4px 0 8px;">
     <div style="font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:32px;color:var(--text-hi);letter-spacing:0.05em;">STATIONS</div>
@@ -1877,6 +1879,7 @@ function showAboutModal() {
 
     <div style="font-family:'Barlow Condensed',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.2em;color:var(--text-xlo);margin-bottom:16px;">STATIONS ${version}</div>
 
+    <button class="btn-ghost btn-full" onclick="hideModal();setTimeout(()=>showWhatsNewModal(),120)" style="color:var(--bronze);border-color:var(--bronze-dim);margin-bottom:8px;">What's New in v3.6.5 ↗</button>
     <button class="btn-ghost btn-full" onclick="hideModal()">Close</button>
   </div>`);
 }
@@ -1887,40 +1890,43 @@ function showWhatsNewModal() {
 
   showModal(`
   <div style="padding:4px 0 8px;">
-    <div style="font-family:'Barlow Condensed',sans-serif;font-weight:500;font-size:9px;text-transform:uppercase;letter-spacing:0.34em;color:var(--bronze);margin-bottom:4px;">STATIONS ${CURRENT_VERSION}</div>
+    <div style="font-family:'Barlow Condensed',sans-serif;font-weight:500;font-size:9px;text-transform:uppercase;letter-spacing:0.34em;color:var(--bronze);margin-bottom:4px;">STATIONS v3.6.5</div>
     <div style="font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:26px;text-transform:uppercase;color:var(--text-hi);margin-bottom:4px;">What's New</div>
-    <div style="height:1px;background:linear-gradient(90deg,var(--bronze) 0%,var(--bronze-dim) 40%,transparent 80%);margin-bottom:20px;"></div>
+    <div style="height:1px;background:linear-gradient(90deg,var(--bronze) 0%,var(--bronze-dim) 40%,transparent 80%);margin-bottom:16px;"></div>
+
+    <div style="font-family:'DM Sans',sans-serif;font-size:13px;color:var(--text-lo);margin-bottom:16px;">Since v3.5.2 (what I shared on r/kettlebell initially), a lot has been built and tested.</div>
 
     <div style="display:flex;flex-direction:column;gap:16px;font-family:'DM Sans',sans-serif;font-size:14px;color:var(--text-mid);line-height:1.5;">
 
       <div>
         <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;color:var(--text-hi);margin-bottom:3px;">⚡ Tabata + HIIT Timers</div>
-        <div>Two new formats. Simple mode is a pure timer — no setup, just go. Advanced mode uses saved blocks and logs every session to history with real lap timing.</div>
+        <div>Two new formats. Simple mode is a pure timer — no setup, just go. Advanced mode uses saved Tabata blocks and logs every session to history with real lap timing.</div>
+        <div style="margin-top:5px;font-size:13px;color:var(--text-lo);">Basically, you can now unsubscribe from your paid HIIT timers. (if you want)</div>
       </div>
 
       <div>
         <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;color:var(--text-hi);margin-bottom:3px;">🧱 Block Builder</div>
-        <div>Build reusable 8-exercise Tabata blocks in the Exercise Builder. Drop any block into a Standard WOD as a station — it runs automatically when you LAP into it.</div>
+        <div>Build reusable 8-exercise Tabata blocks in the Exercise Builder. Drop any saved block into a Standard WOD as a station — it runs automatically when you LAP into it.</div>
       </div>
 
       <div>
-        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;color:var(--text-hi);margin-bottom:3px;">⏱ EMOM</div>
-        <div>Every Minute On the Minute. Set your interval and rounds — the clock handles the rest. Auto-advances each minute.</div>
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;color:var(--text-hi);margin-bottom:3px;">⏱ EMOM Upgraded</div>
+        <div>Format sheet now shows all 4 timer types. EMOM, Tabata, and HIIT WODs get their own badges in the library.</div>
       </div>
 
       <div>
-        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;color:var(--text-hi);margin-bottom:3px;">🔗 Complex Builder Upgraded</div>
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;color:var(--text-hi);margin-bottom:3px;">🔗 Complex Builder Rebuilt</div>
         <div>Pick exercises from your library instead of typing names. Weight per movement. Search and filter by equipment.</div>
       </div>
 
       <div>
         <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;color:var(--text-hi);margin-bottom:3px;">📊 Session History</div>
-        <div>Tabata and HIIT sessions save to history with real lap timing. Block rest periods show as separate rows.</div>
+        <div>Tabata and HIIT sessions now save to history. Real lap timing — see each block and rest period as separate rows.</div>
       </div>
 
     </div>
 
-    <button class="btn-primary btn-full" onclick="hideModal()" style="margin-top:24px;">Let's go</button>
+    <button class="btn-primary btn-full" onclick="hideModal()" style="margin-top:24px;">Let's go →</button>
   </div>`);
 }
 
