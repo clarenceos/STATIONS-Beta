@@ -2410,41 +2410,63 @@ async function renderBlockEditor() {
   </div>`;
 }
 
-async function openBlockSlotPicker(slotIdx) {
+let _blockSlotPickerFilter = 'all';
+let _blockSlotPickerSearch = '';
+
+async function openBlockSlotPicker(slotIdx, filter, search) {
+  _blockSlotPickerFilter = filter || _blockSlotPickerFilter || 'all';
+  _blockSlotPickerSearch = search !== undefined ? search : (_blockSlotPickerSearch || '');
+
   const exercises = await DB.all('exercises');
-  const usable = exercises.filter(e => e.equipment !== 'cardio' && e.equipment !== 'interval');
+  let usable = exercises.filter(e => e.equipment !== 'cardio' && e.equipment !== 'interval');
+
+  usable.sort((a, b) => (b.useCount || 0) - (a.useCount || 0));
+
+  if (_blockSlotPickerFilter !== 'all') {
+    usable = usable.filter(e => e.equipment === _blockSlotPickerFilter);
+  }
+
+  const q = _blockSlotPickerSearch.toLowerCase().trim();
+  if (q) {
+    usable = usable.filter(e => e.name.toLowerCase().includes(q));
+  }
+
   const blk = S._editingBlock;
   const filledCount = blk.slots.filter(s => s.exerciseId).length;
 
-  const grouped = {};
-  for (const ex of usable) {
-    if (!grouped[ex.equipment]) grouped[ex.equipment] = [];
-    grouped[ex.equipment].push(ex);
-  }
+  const equipments = ['all', 'kettlebell', 'dumbbell', 'barbell', 'bodyweight', 'medicine_ball', 'sandbag', 'trx'];
+  const pillsHtml = equipments.map(eq =>
+    `<div class="pill ${_blockSlotPickerFilter === eq ? 'active' : ''}" onclick="openBlockSlotPicker(${slotIdx},'${eq}',document.getElementById('block-slot-search')?.value||'')" style="font-size:11px;padding:3px 8px;">${eq === 'all' ? 'All' : eqLabel(eq)}</div>`
+  ).join('');
 
   let listHtml = '';
-  for (const [eq, exList] of Object.entries(grouped)) {
-    listHtml += `<div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.2em;color:var(--text-lo);margin:12px 0 6px;">${eqLabel(eq)}</div>`;
-    for (const ex of exList) {
+  if (usable.length === 0) {
+    listHtml = `<div style="text-align:center;padding:20px;color:var(--text-lo);font-family:'DM Sans',sans-serif;font-size:13px;">No exercises found</div>`;
+  } else {
+    for (const ex of usable) {
       const alreadyInSlot = blk.slots[slotIdx]?.exerciseId === ex.id;
       const usedElsewhere = blk.slots.some((s, i) => i !== slotIdx && s.exerciseId === ex.id);
       listHtml += `
       <div class="list-item" onclick="${filledCount >= 8 && !blk.slots[slotIdx].exerciseId ? 'toast(\'8 exercises are already in this block\')' : `selectBlockSlotExercise(${slotIdx},'${esc(ex.id)}')`}" style="cursor:pointer;${usedElsewhere ? 'opacity:0.5;' : ''}">
         <div style="flex:1;">
           <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;">${esc(ex.name)}</div>
+          ${ex.useCount > 0 ? `<div style="font-family:'DM Sans',sans-serif;font-size:11px;color:var(--text-lo);margin-top:1px;">${ex.useCount}× used</div>` : ''}
         </div>
-        ${alreadyInSlot ? `<span style="color:var(--yellow);font-size:12px;">✓</span>` : ''}
+        ${alreadyInSlot ? `<span style="color:var(--yellow);font-size:14px;">✓</span>` : ''}
       </div>`;
     }
   }
 
   showModal(`
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
     <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:18px;text-transform:uppercase;">Slot ${slotIdx + 1}</div>
-    <button class="btn-ghost btn-sm" onclick="hideModal()" style="min-width:36px;width:36px;padding:0;">✕</button>
+    <button class="btn-ghost btn-sm" onclick="hideModal();_blockSlotPickerFilter='all';_blockSlotPickerSearch='';" style="min-width:36px;width:36px;padding:0;">✕</button>
   </div>
-  <div style="font-family:'DM Sans',sans-serif;font-size:12px;color:var(--text-lo);margin-bottom:12px;">${filledCount} of 8 selected</div>
-  <div style="max-height:60vh;overflow-y:auto;">${listHtml}</div>`);
+  <div style="font-family:'DM Sans',sans-serif;font-size:12px;color:var(--text-lo);margin-bottom:8px;">${filledCount} of 8 selected</div>
+  <input type="text" id="block-slot-search" value="${esc(_blockSlotPickerSearch)}" placeholder="Search exercises..." style="margin-bottom:8px;"
+    oninput="openBlockSlotPicker(${slotIdx},'${_blockSlotPickerFilter}',this.value)" onfocus="this.select()"/>
+  <div class="pill-row" style="flex-wrap:wrap;margin-bottom:10px;">${pillsHtml}</div>
+  <div style="max-height:50vh;overflow-y:auto;">${listHtml}</div>`);
 }
 
 function selectBlockSlotExercise(slotIdx, exerciseId) {
@@ -2456,6 +2478,8 @@ function selectBlockSlotExercise(slotIdx, exerciseId) {
     return;
   }
   S._editingBlock.slots[slotIdx] = { exerciseId, weight: S._editingBlock.slots[slotIdx].weight || 0 };
+  _blockSlotPickerFilter = 'all';
+  _blockSlotPickerSearch = '';
   hideModal();
   renderBlockEditor();
 }
@@ -3427,8 +3451,9 @@ function openNewWodSheet() {
   </div>
 
   <div style="display:flex;flex-direction:column;gap:10px;">
-    <div style="background:var(--bg-lift);border:1px solid var(--rule);border-radius:var(--radius-card);padding:14px;cursor:pointer;" onclick="hideSheet();nav('wod-builder',{fresh:true,emom:false})">
-      <div style="display:flex;align-items:center;justify-content:space-between;">
+    <div style="background:var(--bg-lift);border:1px solid rgba(234,228,217,0.15);border-radius:var(--radius-card);padding:14px;cursor:pointer;position:relative;overflow:hidden;" onclick="hideSheet();nav('wod-builder',{fresh:true,emom:false})">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--text-hi);opacity:0.4;"></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding-left:8px;">
         <div>
           <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:17px;text-transform:uppercase;color:var(--text-hi);margin-bottom:3px;">STATIONS</div>
           <div style="font-family:'DM Sans',sans-serif;font-size:13px;color:var(--text-mid);">Station-by-station. Press LAP to advance.</div>
@@ -3746,9 +3771,9 @@ async function openTabataAdvancedSetup() {
     </div>
   </div>
 
-  <div style="display:flex;gap:8px;">
-    <button class="btn-ghost btn-full" onclick="saveTabataAdvancedWod()">Save</button>
-    <button class="btn-primary btn-full" onclick="startTabataAdvancedFromSetup()" ${S._tabataAdvancedBlocks.length === 0 ? 'disabled style="opacity:0.4;"' : ''}>Start</button>
+  <div style="display:flex;flex-direction:column;gap:8px;">
+    <button class="btn-primary btn-full" onclick="saveAndStartTabataAdvanced()" ${S._tabataAdvancedBlocks.length === 0 ? 'disabled style="opacity:0.4;"' : ''}>${icons.play} Save &amp; Start</button>
+    <button class="btn-ghost btn-full" onclick="saveTabataAdvancedWod()">Save Only</button>
   </div>
   <button class="btn-ghost btn-full" onclick="hideModal();S._tabataAdvancedBlocks=null;S._tabataAdvancedName=null" style="margin-top:8px;color:var(--text-lo);">Cancel</button>`);
 }
@@ -3779,6 +3804,21 @@ async function saveTabataAdvancedWod() {
   S._tabataAdvancedName = null;
   hideModal();
   nav('wod-library');
+}
+
+async function saveAndStartTabataAdvanced() {
+  const name = (document.getElementById('tabata-adv-name')?.value || S._tabataAdvancedName || '').trim() || `Tabata · ${todayStr()}`;
+  if (!S._tabataAdvancedBlocks || S._tabataAdvancedBlocks.length === 0) { toast('Add at least one block'); return; }
+  const wod = {
+    id: uid(), name, isPrebuilt: false, createdAt: Date.now(), tags: [],
+    tabataMode: true,
+    tabataBlocks: S._tabataAdvancedBlocks.map(b => b.id),
+    tabataBlockRest: S._tabataAdvancedBlockRest || 60,
+    tabataWarmup: S._tabataAdvancedWarmup || 0,
+    tabataCooldown: S._tabataAdvancedCooldown || 0
+  };
+  await DB.put('wods', wod);
+  startTabataAdvancedFromSetup();
 }
 
 async function startTabataAdvancedFromSetup() {
@@ -4258,7 +4298,8 @@ function tabataHiitTick() {
     if (remSecs <= 5 && remSecs >= 1 && th.fiveCountFired !== remSecs) {
       th.fiveCountFired = remSecs;
       if (th.phase === 'warmup' && remSecs <= 3) speak(String(remSecs));
-      if (th.phase === 'work' || th.phase === 'rest') speak(String(remSecs));
+      if (th.phase === 'work') speak(String(remSecs));
+      if (th.phase === 'rest' && remSecs <= 3) speak(String(remSecs));
     }
   }
 
@@ -4362,13 +4403,55 @@ function showTabataHiitComplete() {
   cancelAnimationFrame(th.rafId);
   const nowMs = performance.now();
   const totalMs = nowMs - th.startMs - th.totalPausedMs;
+  const wallClockMs = nowMs - th.startMs;
+
+  const isSimple = th.mode === 'tabata-simple' || th.mode === 'hiit-simple';
+  const isTabata = th.mode === 'tabata-simple' || th.mode === 'tabata-advanced';
+  const defaultName = isTabata
+    ? (isSimple ? `Tabata Simple · ${todayStr()}` : (th.wod?.name || `Tabata · ${todayStr()}`))
+    : (isSimple ? `HIIT Simple · ${todayStr()}` : (th.wod?.name || `HIIT · ${todayStr()}`));
+
   showModal(`
   <div style="text-align:center;padding:8px 0;">
     <div style="font-family:'Barlow Condensed',sans-serif;font-weight:900;font-size:56px;color:var(--text-hi);margin-bottom:8px;letter-spacing:-2px;">${fmtFull(totalMs/1000)}</div>
     <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:22px;text-transform:uppercase;margin-bottom:4px;">Workout Complete!</div>
-    <div style="font-family:'DM Sans',sans-serif;color:var(--text-mid);font-size:14px;margin-bottom:24px;">${esc(th.wod ? th.wod.name : '')}</div>
-    <button class="btn-primary btn-full" onclick="hideModal();nav('home')">Done</button>
+    <div style="font-family:'DM Sans',sans-serif;color:var(--text-mid);font-size:14px;margin-bottom:24px;">${esc(defaultName)}</div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <button class="btn-primary btn-full" onclick="saveTabataHiitSession(${wallClockMs})">Save &amp; View Summary</button>
+      <button class="btn-ghost btn-full" onclick="hideModal();nav('home')" style="color:var(--text-mid);font-size:14px;">Discard</button>
+    </div>
   </div>`);
+}
+
+async function saveTabataHiitSession(wallClockMs) {
+  const th = S.tabataHiit;
+  const isSimple = th.mode === 'tabata-simple' || th.mode === 'hiit-simple';
+  const isTabata = th.mode === 'tabata-simple' || th.mode === 'tabata-advanced';
+  const defaultName = isTabata
+    ? (isSimple ? `Tabata Simple · ${todayStr()}` : (th.wod?.name || `Tabata · ${todayStr()}`))
+    : (isSimple ? `HIIT Simple · ${todayStr()}` : (th.wod?.name || `HIIT · ${todayStr()}`));
+
+  const session = {
+    id: th.sessionId || uid(),
+    wodId: th.wod?.id || null,
+    wodName: defaultName,
+    tabataMode: isTabata,
+    hiitMode: !isTabata,
+    tabataHiitSubmode: th.mode,
+    startedAt: Date.now() - wallClockMs,
+    endedAt: Date.now(),
+    totalDuration: wallClockMs / 1000,
+    blocksCompleted: isTabata ? th.blockIdx : 0,
+    roundsCompleted: !isTabata ? th.currentRound - 1 : 0,
+    laps: [],
+    journalPending: true,
+    journal: null
+  };
+
+  await DB.put('sessions', session);
+  hideModal();
+  S.summaryId = session.id;
+  await nav('summary', { sessionId: session.id });
 }
 
 function pauseTabataHiit() {
@@ -4467,10 +4550,11 @@ function renderTabataHiitScreen() {
   screen.innerHTML = `
   <div id="timer-main-layout" style="display:flex;flex-direction:column;height:100%;overflow:hidden;">
     <div class="timer-top-bar">
-      <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:13px;text-transform:uppercase;color:var(--text-mid);letter-spacing:0.08em;">${progressLine}</div>
+      <div style="flex:1;"></div>
     </div>
 
     <div class="timer-content" id="th-content" style="flex:1;overflow:hidden;display:flex;flex-direction:column;">
+      <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:12px;text-transform:uppercase;color:var(--text-mid);letter-spacing:0.08em;margin-bottom:6px;padding-left:2px;">${progressLine}</div>
       <div class="now-card">
         <div class="now-overline" style="color:${phaseColor};">${phaseLabel}</div>
         ${nowName ? `<div class="now-name">${esc(nowName.toUpperCase())}</div>` : `<div class="now-name" style="color:${phaseColor};">${phaseLabel}</div>`}
@@ -5912,7 +5996,7 @@ async function renderSettings() {
   <div class="card" style="margin-top:12px;">
     <div class="settings-row">
       <div class="settings-label">App Version</div>
-      <div style="color:var(--text-lo);font-size:14px;">STATIONS v3.6</div>
+      <div style="color:var(--text-lo);font-size:14px;">STATIONS v3.6.1</div>
     </div>
   </div>
 
