@@ -1006,7 +1006,9 @@ const S = {
     wod: null,
     sessionId: null,
     halfFired: false,
-    fiveCountFired: 0
+    fiveCountFired: 0,
+    phaseLapLog: [],
+    currentPhaseStartMs: 0
   }
 };
 
@@ -2189,13 +2191,139 @@ async function confirmDeleteExercise(id) {
 }
 
 function openAddComplex() {
-  showModal(complexModalHtml(null));
+  S._editingComplex = {
+    id: uid(), name: '', isNew: true,
+    movements: [
+      { name: '', reps: 10, exerciseId: null, weight: 0 },
+      { name: '', reps: 10, exerciseId: null, weight: 0 }
+    ]
+  };
+  renderComplexEditor();
 }
 
 async function openEditComplex(id) {
   const cx = await DB.get('complexes', id);
   if (!cx) return;
-  showModal(complexModalHtml(cx));
+  // Migrate old movements to new schema
+  S._editingComplex = {
+    ...cx,
+    isNew: false,
+    movements: (cx.movements || []).map(m => ({
+      name: m.name || '',
+      reps: m.reps || 10,
+      exerciseId: m.exerciseId || null,
+      weight: m.weight || 0
+    }))
+  };
+  renderComplexEditor();
+}
+
+function renderComplexEditor() {
+  const cx = S._editingComplex;
+  if (!cx) return;
+
+  let movHtml = '';
+  cx.movements.forEach((m, i) => {
+    movHtml += `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;" id="cx-mov-${i}">
+      <input type="number" value="${m.reps || 10}" inputmode="numeric" onfocus="this.select()"
+        style="width:52px;text-align:center;flex-shrink:0;padding:8px 4px;"
+        onchange="S._editingComplex.movements[${i}].reps=parseInt(this.value)||10"/>
+      <button onclick="openComplexMovementPicker(${i})"
+        style="flex:1;text-align:left;background:var(--bg-lift);border:1px solid var(--rule);border-radius:var(--radius-input);padding:8px 10px;color:${m.name ? 'var(--text-hi)' : 'var(--text-lo)'};font-family:'Barlow Condensed',sans-serif;font-weight:${m.name ? '800' : '500'};font-size:14px;text-transform:uppercase;cursor:pointer;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+        ${m.name ? esc(m.name) : 'Pick exercise'}
+      </button>
+      <input type="number" value="${m.weight || 0}" inputmode="numeric" onfocus="this.select()"
+        placeholder="0" style="width:54px;flex-shrink:0;"
+        onchange="S._editingComplex.movements[${i}].weight=parseFloat(this.value)||0"/>
+      <span style="font-family:'DM Sans',sans-serif;font-size:11px;color:var(--text-lo);flex-shrink:0;">kg</span>
+      <button onclick="removeComplexMovement(${i})" style="background:none;border:none;color:var(--error);font-size:18px;cursor:pointer;padding:4px;flex-shrink:0;min-width:24px;">−</button>
+    </div>`;
+  });
+
+  document.getElementById('screen-exercises').innerHTML = `
+  <div class="nav-header">
+    <div class="nav-back" onclick="S._editingComplex=null;S.exTab='complexes';renderExercises()">← Complexes</div>
+    <div class="nav-title">${cx.isNew ? 'New Complex' : 'Edit Complex'}</div>
+    <div style="width:60px;"></div>
+  </div>
+
+  <div class="form-row" style="margin-bottom:14px;">
+    <label>Complex Name</label>
+    <input type="text" id="cx-name" value="${esc(cx.name)}" placeholder="e.g. KB Devil Press" onfocus="this.select()"
+      onchange="S._editingComplex.name=this.value"/>
+  </div>
+
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+    <div style="font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.2em;color:var(--text-lo);">Movements (${cx.movements.length})</div>
+    <div style="font-family:'DM Sans',sans-serif;font-size:11px;color:var(--text-lo);">reps · exercise · weight</div>
+  </div>
+
+  ${movHtml}
+
+  <button class="btn-ghost btn-full" onclick="addComplexMovement()" style="margin-bottom:16px;">+ Add Movement</button>
+
+  <div style="display:flex;gap:10px;">
+    <button class="btn-ghost btn-full" onclick="S._editingComplex=null;S.exTab='complexes';renderExercises()">Cancel</button>
+    <button class="btn-primary btn-full" onclick="saveComplex()">Save Complex</button>
+  </div>`;
+}
+
+async function openComplexMovementPicker(movIdx) {
+  const exercises = await DB.all('exercises');
+  const usable = exercises.filter(e => e.equipment !== 'cardio' && e.equipment !== 'interval');
+
+  const now = Date.now();
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  const recentlyUsed = usable.filter(e => e.lastUsedAt && (now - e.lastUsedAt) < oneDayMs);
+  const recentIds = new Set(recentlyUsed.map(e => e.id));
+  const frequentlyUsed = usable.filter(e => !recentIds.has(e.id) && (e.useCount || 0) > 0)
+    .sort((a, b) => (b.useCount || 0) - (a.useCount || 0));
+  const freqIds = new Set(frequentlyUsed.map(e => e.id));
+  const alphabetical = usable.filter(e => !recentIds.has(e.id) && !freqIds.has(e.id))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  function buildRow(ex) {
+    const isCurrent = S._editingComplex?.movements[movIdx]?.exerciseId === ex.id;
+    return `<div class="list-item" onclick="selectComplexMovementExercise(${movIdx},'${esc(ex.id)}')" style="cursor:pointer;">
+      <div style="flex:1;font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;">${esc(ex.name)}</div>
+      ${isCurrent ? `<span style="color:var(--yellow);font-size:14px;">✓</span>` : ''}
+    </div>`;
+  }
+
+  function buildSect(title, items) {
+    if (!items.length) return '';
+    return `<div style="font-family:'Barlow Condensed',sans-serif;font-weight:500;font-size:10px;text-transform:uppercase;letter-spacing:0.25em;color:var(--text-xlo);padding:10px 0 4px;">${title}</div>${items.map(buildRow).join('')}`;
+  }
+
+  const listHtml = usable.length === 0
+    ? `<div style="text-align:center;padding:20px;color:var(--text-lo);font-family:'DM Sans',sans-serif;font-size:13px;">No exercises found</div>`
+    : buildSect('Recently Used', recentlyUsed) + buildSect('Frequently Used', frequentlyUsed) + buildSect('All Exercises', alphabetical);
+
+  showModal(`
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+    <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:18px;text-transform:uppercase;">Movement ${movIdx + 1}</div>
+    <button class="btn-ghost btn-sm" onclick="hideModal()" style="min-width:36px;width:36px;padding:0;">✕</button>
+  </div>
+  <div style="max-height:65vh;overflow-y:auto;">${listHtml}</div>`);
+}
+
+function selectComplexMovementExercise(movIdx, exerciseId) {
+  if (!S._editingComplex) return;
+  const mov = S._editingComplex.movements[movIdx];
+  if (!mov) return;
+  mov.exerciseId = exerciseId;
+  mov.weight = mov.weight || 0;
+  hideModal();
+  DB.get('exercises', exerciseId).then(ex => {
+    if (ex && S._editingComplex?.movements[movIdx]) {
+      ex.lastUsedAt = Date.now();
+      S._editingComplex.movements[movIdx].name = ex.name;
+      S._editingComplex.movements[movIdx].weight = mov.weight || ex.defaultWeight || 0;
+      DB.put('exercises', ex);
+    }
+    renderComplexEditor();
+  });
 }
 
 function complexModalHtml(cx) {
@@ -2232,55 +2360,40 @@ function complexMovementRowHtml(m, i) {
 }
 
 function addComplexMovement() {
-  const wrap = document.getElementById('cx-movements');
-  if (!wrap) return;
-  const idx = wrap.querySelectorAll('.movement-item').length;
-  const div = document.createElement('div');
-  div.innerHTML = complexMovementRowHtml({ name: '', reps: 10 }, idx);
-  wrap.appendChild(div.firstElementChild);
+  if (!S._editingComplex) return;
+  S._editingComplex.movements.push({ name: '', reps: 10, exerciseId: null, weight: 0 });
+  renderComplexEditor();
 }
 
 function removeComplexMovement(idx) {
-  const el = document.getElementById('cx-mov-' + idx);
-  if (el) {
-    const wrap = document.getElementById('cx-movements');
-    if (wrap && wrap.querySelectorAll('.movement-item').length > 2) {
-      el.remove();
-    } else {
-      toast('Minimum 2 movements required');
-    }
-  }
+  if (!S._editingComplex) return;
+  if (S._editingComplex.movements.length <= 2) { toast('Minimum 2 movements required'); return; }
+  S._editingComplex.movements.splice(idx, 1);
+  renderComplexEditor();
 }
 
-async function saveComplex(editId) {
-  const name = (document.getElementById('cx-name').value || '').trim();
+async function saveComplex() {
+  const cx = S._editingComplex;
+  if (!cx) return;
+  const name = (document.getElementById('cx-name')?.value || cx.name || '').trim();
   if (!name) { toast('Please enter a name'); return; }
-  const wrap = document.getElementById('cx-movements');
-  const rows = wrap ? wrap.querySelectorAll('.movement-item') : [];
-  const movements = [];
-  rows.forEach((row, i) => {
-    const repsEl = document.getElementById('cx-mov-reps-' + i);
-    const nameEl = document.getElementById('cx-mov-name-' + i);
-    if (repsEl && nameEl) {
-      const movName = (nameEl.value || '').trim();
-      const movReps = parseInt(repsEl.value) || 10;
-      if (movName) movements.push({ name: movName, reps: movReps });
-    }
-  });
+  const movements = cx.movements.filter(m => m.name.trim());
   if (movements.length < 2) { toast('Add at least 2 movements'); return; }
 
-  if (editId) {
-    const cx = await DB.get('complexes', editId);
-    if (!cx) return;
-    Object.assign(cx, { name, movements });
-    await DB.put('complexes', cx);
-    toast('Complex updated');
-  } else {
-    const cx = { id: uid(), name, movements, isPrebuilt: false };
-    await DB.put('complexes', cx);
-    toast('Complex added');
+  // Write back weights to exercise defaultWeight
+  for (const m of movements) {
+    if (m.exerciseId && m.weight > 0) {
+      DB.get('exercises', m.exerciseId).then(ex => {
+        if (ex) { ex.defaultWeight = m.weight; DB.put('exercises', ex); }
+      });
+    }
   }
-  hideModal();
+
+  const toSave = { id: cx.id, name, movements, isPrebuilt: cx.isPrebuilt || false };
+  await DB.put('complexes', toSave);
+  toast(cx.isNew ? 'Complex added' : 'Complex updated');
+  S._editingComplex = null;
+  S.exTab = 'complexes';
   await renderExercises();
 }
 
@@ -2496,14 +2609,20 @@ function selectBlockSlotExercise(slotIdx, exerciseId) {
     toast('8 exercises are already in this block');
     return;
   }
-  S._editingBlock.slots[slotIdx] = { exerciseId, weight: S._editingBlock.slots[slotIdx].weight || 0 };
-  DB.get('exercises', exerciseId).then(ex => {
-    if (ex) { ex.lastUsedAt = Date.now(); DB.put('exercises', ex); }
-  });
+  // Set slot with placeholder weight, then async pre-fill from defaultWeight
+  S._editingBlock.slots[slotIdx] = { exerciseId, weight: 0 };
   _blockSlotPickerFilter = 'all';
   _blockSlotPickerSearch = '';
   hideModal();
-  renderBlockEditor();
+  DB.get('exercises', exerciseId).then(ex => {
+    if (ex) {
+      ex.lastUsedAt = Date.now();
+      if (!S._editingBlock.slots[slotIdx]) return;
+      S._editingBlock.slots[slotIdx].weight = ex.defaultWeight || 0;
+      DB.put('exercises', ex);
+    }
+    renderBlockEditor();
+  });
 }
 
 async function saveBlock() {
@@ -2514,6 +2633,14 @@ async function saveBlock() {
   blk.name = name;
   const { isNew, ...toSave } = blk;
   await DB.put('tabataBlocks', toSave);
+  // Write back weights to exercise defaultWeight
+  for (const slot of blk.slots) {
+    if (slot.exerciseId && slot.weight > 0) {
+      DB.get('exercises', slot.exerciseId).then(ex => {
+        if (ex) { ex.defaultWeight = slot.weight; DB.put('exercises', ex); }
+      });
+    }
+  }
   S._editingBlock = null;
   toast('Block saved');
   S.exTab = 'blocks';
@@ -3707,6 +3834,7 @@ function startTabataSimple() {
   th.totalRounds = ts.blocks;
   th.halfFired = false;
   th.fiveCountFired = 0;
+  th.phaseLapLog = []; th.currentPhaseStartMs = 0;
 
   showScreen('timer');
 
@@ -3863,6 +3991,7 @@ async function startTabataAdvancedFromSetup() {
   th.workDuration = 20; th.restDuration = 10;
   th.currentRound = 1; th.totalRounds = blocks.length;
   th.halfFired = false; th.fiveCountFired = 0;
+  th.phaseLapLog = []; th.currentPhaseStartMs = 0;
 
   const allExercises = await DB.all('exercises');
   for (const blk of th.blocks) {
@@ -3914,6 +4043,7 @@ async function startTabataAdvancedWod(id) {
   th.workDuration = 20; th.restDuration = 10;
   th.currentRound = 1; th.totalRounds = blocks.length;
   th.halfFired = false; th.fiveCountFired = 0;
+  th.phaseLapLog = []; th.currentPhaseStartMs = 0;
 
   showScreen('timer');
   if (th.warmupDuration > 0) {
@@ -4026,6 +4156,7 @@ function startHiitSimple() {
   th.currentRound = 1;
   th.totalRounds = hs.rounds;
   th.halfFired = false; th.fiveCountFired = 0;
+  th.phaseLapLog = []; th.currentPhaseStartMs = 0;
 
   showScreen('timer');
   if (hs.warmup > 0) {
@@ -4177,6 +4308,7 @@ function startHiitAdvancedFromSetup() {
   th.currentRound = 1;
   th.totalRounds = S._hiitAdvancedRounds || 8;
   th.halfFired = false; th.fiveCountFired = 0;
+  th.phaseLapLog = []; th.currentPhaseStartMs = 0;
 
   S._hiitAdvancedExercises = null; S._hiitAdvancedName = null;
   hideModal();
@@ -4205,6 +4337,7 @@ async function startHiitAdvancedWod(id) {
   th.restDuration = wod.hiitRest || 20;
   th.currentRound = 1; th.totalRounds = wod.hiitRounds || 8;
   th.halfFired = false; th.fiveCountFired = 0;
+  th.phaseLapLog = []; th.currentPhaseStartMs = 0;
 
   showScreen('timer');
   if (th.warmupDuration > 0) {
@@ -4228,6 +4361,7 @@ function startTabataHiitPhase(phase, durationSecs) {
 
   const dur = durationSecs * 1000;
   th.phaseEndMs = performance.now() + dur;
+  th.currentPhaseStartMs = performance.now();
   th.halfFired = false;
   th.fiveCountFired = 0;
 
@@ -4337,6 +4471,15 @@ function advanceTabataHiitPhase() {
   const th = S.tabataHiit;
   cancelAnimationFrame(th.rafId);
   th.active = false;
+
+  // Log the phase that just completed with real timing
+  th.phaseLapLog.push({
+    phase: th.phase,
+    blockIdx: th.blockIdx,
+    roundNum: th.currentRound,
+    startMs: th.currentPhaseStartMs || th.startMs,
+    endMs: performance.now()
+  });
 
   const mode = th.mode;
   const isSimple = mode === 'tabata-simple' || mode === 'hiit-simple';
@@ -4453,37 +4596,47 @@ async function saveTabataHiitSession(wallClockMs) {
     ? (isSimple ? `Tabata Simple · ${todayStr()}` : (th.wod?.name || `Tabata · ${todayStr()}`))
     : (isSimple ? `HIIT Simple · ${todayStr()}` : (th.wod?.name || `HIIT · ${todayStr()}`));
 
-  // Build laps array so summary shows real breakdown + active time
+  // Build laps from phaseLapLog — real measured durations
   const lapsArr = [];
+  let lapNum = 1;
+
   if (isTabata) {
-    const blocksCount = th.blockIdx || th.totalRounds || 1;
-    for (let i = 0; i < blocksCount; i++) {
-      const blkName = (!isSimple && th.blocks[i]) ? th.blocks[i].name : `Block ${i + 1}`;
-      lapsArr.push({
-        lapNumber: i + 1,
-        type: 'exercise',
-        label: blkName,
-        duration: 240,
-        continued: false,
-        startTime: i * (240 + th.blockRestDuration)
-      });
+    // Group work+rest phases by blockIdx into one exercise lap per block
+    const blockGroups = {};
+    const blockRests = [];
+    for (const entry of th.phaseLapLog) {
+      const dur = (entry.endMs - entry.startMs) / 1000;
+      if (entry.phase === 'work' || entry.phase === 'rest') {
+        const bi = entry.blockIdx;
+        if (!blockGroups[bi]) blockGroups[bi] = 0;
+        blockGroups[bi] += dur;
+      } else if (entry.phase === 'blockRest') {
+        // blockIdx here is already the next block (post-increment), so afterBlock = blockIdx - 1
+        blockRests.push({ afterBlock: entry.blockIdx - 1, dur });
+      }
+    }
+    const blockKeys = Object.keys(blockGroups).map(Number).sort((a, b) => a - b);
+    for (const bi of blockKeys) {
+      const blkName = (!isSimple && th.blocks[bi]) ? th.blocks[bi].name : `Block ${bi + 1}`;
+      lapsArr.push({ lapNumber: lapNum++, type: 'exercise', label: blkName, duration: Math.round(blockGroups[bi]), continued: false });
+      const rest = blockRests.find(r => r.afterBlock === bi);
+      if (rest) {
+        lapsArr.push({ lapNumber: lapNum++, type: 'pause', label: 'Block Rest', duration: Math.round(rest.dur), continued: false });
+      }
     }
   } else {
-    const roundsCount = th.currentRound > 1 ? th.currentRound - 1 : th.totalRounds;
-    const exerciseCount = (!isSimple && th.exercises.length > 0) ? th.exercises.length : 1;
-    const roundDur = (th.workDuration + th.restDuration) * exerciseCount;
-    for (let i = 0; i < roundsCount; i++) {
-      const label = (!isSimple && th.exercises.length > 0)
-        ? th.exercises.map(e => e.name).join(', ')
-        : `Round ${i + 1}`;
-      lapsArr.push({
-        lapNumber: i + 1,
-        type: 'exercise',
-        label: label,
-        duration: roundDur,
-        continued: false,
-        startTime: i * roundDur
-      });
+    // HIIT: group work+rest phases by roundNum into one exercise lap per round
+    const roundGroups = {};
+    for (const entry of th.phaseLapLog) {
+      if (entry.phase === 'work' || entry.phase === 'rest') {
+        const r = entry.roundNum;
+        if (!roundGroups[r]) roundGroups[r] = 0;
+        roundGroups[r] += (entry.endMs - entry.startMs) / 1000;
+      }
+    }
+    const roundKeys = Object.keys(roundGroups).map(Number).sort((a, b) => a - b);
+    for (const r of roundKeys) {
+      lapsArr.push({ lapNumber: lapNum++, type: 'exercise', label: `Round ${r}`, duration: Math.round(roundGroups[r]), continued: false });
     }
   }
 
@@ -6058,7 +6211,7 @@ async function renderSettings() {
   <div class="card" style="margin-top:12px;">
     <div class="settings-row">
       <div class="settings-label">App Version</div>
-      <div style="color:var(--text-lo);font-size:14px;">STATIONS v3.6.2</div>
+      <div style="color:var(--text-lo);font-size:14px;">STATIONS v3.6.3</div>
     </div>
   </div>
 
