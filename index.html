@@ -2414,13 +2414,11 @@ let _blockSlotPickerFilter = 'all';
 let _blockSlotPickerSearch = '';
 
 async function openBlockSlotPicker(slotIdx, filter, search) {
-  _blockSlotPickerFilter = filter || _blockSlotPickerFilter || 'all';
+  _blockSlotPickerFilter = filter !== undefined ? filter : (_blockSlotPickerFilter || 'all');
   _blockSlotPickerSearch = search !== undefined ? search : (_blockSlotPickerSearch || '');
 
-  const exercises = await DB.all('exercises');
-  let usable = exercises.filter(e => e.equipment !== 'cardio' && e.equipment !== 'interval');
-
-  usable.sort((a, b) => (b.useCount || 0) - (a.useCount || 0));
+  const allExercises = await DB.all('exercises');
+  let usable = allExercises.filter(e => e.equipment !== 'cardio' && e.equipment !== 'interval');
 
   if (_blockSlotPickerFilter !== 'all') {
     usable = usable.filter(e => e.equipment === _blockSlotPickerFilter);
@@ -2433,29 +2431,50 @@ async function openBlockSlotPicker(slotIdx, filter, search) {
 
   const blk = S._editingBlock;
   const filledCount = blk.slots.filter(s => s.exerciseId).length;
+  const now = Date.now();
+  const oneDayMs = 24 * 60 * 60 * 1000;
 
-  const equipments = ['all', 'kettlebell', 'dumbbell', 'barbell', 'bodyweight', 'medicine_ball', 'sandbag', 'trx'];
-  const pillsHtml = equipments.map(eq =>
-    `<div class="pill ${_blockSlotPickerFilter === eq ? 'active' : ''}" onclick="openBlockSlotPicker(${slotIdx},'${eq}',document.getElementById('block-slot-search')?.value||'')" style="font-size:11px;padding:3px 8px;">${eq === 'all' ? 'All' : eqLabel(eq)}</div>`
-  ).join('');
+  const recentlyUsed = usable.filter(e => e.lastUsedAt && (now - e.lastUsedAt) < oneDayMs);
+  const recentIds = new Set(recentlyUsed.map(e => e.id));
+  const frequentlyUsed = usable.filter(e => !recentIds.has(e.id) && (e.useCount || 0) > 0)
+    .sort((a, b) => (b.useCount || 0) - (a.useCount || 0));
+  const freqIds = new Set(frequentlyUsed.map(e => e.id));
+  const alphabetical = usable.filter(e => !recentIds.has(e.id) && !freqIds.has(e.id))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  function buildExRow(ex) {
+    const alreadyInSlot = blk.slots[slotIdx]?.exerciseId === ex.id;
+    const usedElsewhere = blk.slots.some((s, i) => i !== slotIdx && s.exerciseId === ex.id);
+    const blocked = filledCount >= 8 && !blk.slots[slotIdx].exerciseId;
+    return `
+    <div class="list-item" onclick="${blocked ? 'toast(\'8 exercises are already in this block\')' : `selectBlockSlotExercise(${slotIdx},'${esc(ex.id)}')`}" style="cursor:pointer;${usedElsewhere ? 'opacity:0.5;' : ''}">
+      <div style="flex:1;">
+        <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;">${esc(ex.name)}</div>
+      </div>
+      ${alreadyInSlot ? `<span style="color:var(--yellow);font-size:14px;">✓</span>` : ''}
+    </div>`;
+  }
+
+  function buildSection(title, items) {
+    if (items.length === 0) return '';
+    return `
+    <div style="font-family:'Barlow Condensed',sans-serif;font-weight:500;font-size:10px;text-transform:uppercase;letter-spacing:0.25em;color:var(--text-xlo);padding:10px 0 4px;">${title}</div>
+    ${items.map(buildExRow).join('')}`;
+  }
 
   let listHtml = '';
   if (usable.length === 0) {
     listHtml = `<div style="text-align:center;padding:20px;color:var(--text-lo);font-family:'DM Sans',sans-serif;font-size:13px;">No exercises found</div>`;
   } else {
-    for (const ex of usable) {
-      const alreadyInSlot = blk.slots[slotIdx]?.exerciseId === ex.id;
-      const usedElsewhere = blk.slots.some((s, i) => i !== slotIdx && s.exerciseId === ex.id);
-      listHtml += `
-      <div class="list-item" onclick="${filledCount >= 8 && !blk.slots[slotIdx].exerciseId ? 'toast(\'8 exercises are already in this block\')' : `selectBlockSlotExercise(${slotIdx},'${esc(ex.id)}')`}" style="cursor:pointer;${usedElsewhere ? 'opacity:0.5;' : ''}">
-        <div style="flex:1;">
-          <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:15px;text-transform:uppercase;">${esc(ex.name)}</div>
-          ${ex.useCount > 0 ? `<div style="font-family:'DM Sans',sans-serif;font-size:11px;color:var(--text-lo);margin-top:1px;">${ex.useCount}× used</div>` : ''}
-        </div>
-        ${alreadyInSlot ? `<span style="color:var(--yellow);font-size:14px;">✓</span>` : ''}
-      </div>`;
-    }
+    listHtml = buildSection('Recently Used', recentlyUsed)
+      + buildSection('Frequently Used', frequentlyUsed)
+      + buildSection('All Exercises', alphabetical);
   }
+
+  const equipments = ['all', 'kettlebell', 'dumbbell', 'barbell', 'bodyweight', 'medicine_ball', 'sandbag', 'trx'];
+  const pillsHtml = equipments.map(eq =>
+    `<div class="pill ${_blockSlotPickerFilter === eq ? 'active' : ''}" onclick="openBlockSlotPicker(${slotIdx},'${eq}',document.getElementById('block-slot-search')?.value||'')" style="font-size:11px;padding:3px 8px;">${eq === 'all' ? 'All' : eqLabel(eq)}</div>`
+  ).join('');
 
   showModal(`
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
@@ -2465,7 +2484,7 @@ async function openBlockSlotPicker(slotIdx, filter, search) {
   <div style="font-family:'DM Sans',sans-serif;font-size:12px;color:var(--text-lo);margin-bottom:8px;">${filledCount} of 8 selected</div>
   <input type="text" id="block-slot-search" value="${esc(_blockSlotPickerSearch)}" placeholder="Search exercises..." style="margin-bottom:8px;"
     oninput="openBlockSlotPicker(${slotIdx},'${_blockSlotPickerFilter}',this.value)" onfocus="this.select()"/>
-  <div class="pill-row" style="flex-wrap:wrap;margin-bottom:10px;">${pillsHtml}</div>
+  <div class="pill-row" style="flex-wrap:wrap;margin-bottom:6px;">${pillsHtml}</div>
   <div style="max-height:50vh;overflow-y:auto;">${listHtml}</div>`);
 }
 
@@ -2478,6 +2497,9 @@ function selectBlockSlotExercise(slotIdx, exerciseId) {
     return;
   }
   S._editingBlock.slots[slotIdx] = { exerciseId, weight: S._editingBlock.slots[slotIdx].weight || 0 };
+  DB.get('exercises', exerciseId).then(ex => {
+    if (ex) { ex.lastUsedAt = Date.now(); DB.put('exercises', ex); }
+  });
   _blockSlotPickerFilter = 'all';
   _blockSlotPickerSearch = '';
   hideModal();
@@ -3451,8 +3473,8 @@ function openNewWodSheet() {
   </div>
 
   <div style="display:flex;flex-direction:column;gap:10px;">
-    <div style="background:var(--bg-lift);border:1px solid rgba(234,228,217,0.15);border-radius:var(--radius-card);padding:14px;cursor:pointer;position:relative;overflow:hidden;" onclick="hideSheet();nav('wod-builder',{fresh:true,emom:false})">
-      <div style="position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--text-hi);opacity:0.4;"></div>
+    <div style="background:var(--bg-lift);border:1px solid rgba(184,118,42,0.2);border-radius:var(--radius-card);padding:14px;cursor:pointer;position:relative;overflow:hidden;" onclick="hideSheet();nav('wod-builder',{fresh:true,emom:false})">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--bronze);"></div>
       <div style="display:flex;align-items:center;justify-content:space-between;padding-left:8px;">
         <div>
           <div style="font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:17px;text-transform:uppercase;color:var(--text-hi);margin-bottom:3px;">STATIONS</div>
@@ -3462,8 +3484,8 @@ function openNewWodSheet() {
       </div>
     </div>
 
-    <div style="background:var(--bg-lift);border:1px solid rgba(184,118,42,0.2);border-radius:var(--radius-card);padding:14px;cursor:pointer;position:relative;overflow:hidden;" onclick="hideSheet();openEmomSetupModal()">
-      <div style="position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--bronze);"></div>
+    <div style="background:var(--bg-lift);border:1px solid rgba(126,115,103,0.3);border-radius:var(--radius-card);padding:14px;cursor:pointer;position:relative;overflow:hidden;" onclick="hideSheet();openEmomSetupModal()">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--text-mid);opacity:0.6;"></div>
       <div style="display:flex;align-items:center;justify-content:space-between;padding-left:8px;">
         <div>
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
@@ -4431,6 +4453,40 @@ async function saveTabataHiitSession(wallClockMs) {
     ? (isSimple ? `Tabata Simple · ${todayStr()}` : (th.wod?.name || `Tabata · ${todayStr()}`))
     : (isSimple ? `HIIT Simple · ${todayStr()}` : (th.wod?.name || `HIIT · ${todayStr()}`));
 
+  // Build laps array so summary shows real breakdown + active time
+  const lapsArr = [];
+  if (isTabata) {
+    const blocksCount = th.blockIdx || th.totalRounds || 1;
+    for (let i = 0; i < blocksCount; i++) {
+      const blkName = (!isSimple && th.blocks[i]) ? th.blocks[i].name : `Block ${i + 1}`;
+      lapsArr.push({
+        lapNumber: i + 1,
+        type: 'exercise',
+        label: blkName,
+        duration: 240,
+        continued: false,
+        startTime: i * (240 + th.blockRestDuration)
+      });
+    }
+  } else {
+    const roundsCount = th.currentRound > 1 ? th.currentRound - 1 : th.totalRounds;
+    const exerciseCount = (!isSimple && th.exercises.length > 0) ? th.exercises.length : 1;
+    const roundDur = (th.workDuration + th.restDuration) * exerciseCount;
+    for (let i = 0; i < roundsCount; i++) {
+      const label = (!isSimple && th.exercises.length > 0)
+        ? th.exercises.map(e => e.name).join(', ')
+        : `Round ${i + 1}`;
+      lapsArr.push({
+        lapNumber: i + 1,
+        type: 'exercise',
+        label: label,
+        duration: roundDur,
+        continued: false,
+        startTime: i * roundDur
+      });
+    }
+  }
+
   const session = {
     id: th.sessionId || uid(),
     wodId: th.wod?.id || null,
@@ -4441,9 +4497,9 @@ async function saveTabataHiitSession(wallClockMs) {
     startedAt: Date.now() - wallClockMs,
     endedAt: Date.now(),
     totalDuration: wallClockMs / 1000,
-    blocksCompleted: isTabata ? th.blockIdx : 0,
-    roundsCompleted: !isTabata ? th.currentRound - 1 : 0,
-    laps: [],
+    blocksCompleted: isTabata ? (th.blockIdx || th.totalRounds) : 0,
+    roundsCompleted: !isTabata ? (th.currentRound > 1 ? th.currentRound - 1 : th.totalRounds) : 0,
+    laps: lapsArr,
     journalPending: true,
     journal: null
   };
@@ -4533,7 +4589,13 @@ function renderTabataHiitScreen() {
   }
 
   let progressLine = '';
-  if (isTabata) {
+  if (phase === 'warmup') {
+    progressLine = 'WARMUP';
+  } else if (phase === 'cooldown') {
+    progressLine = 'COOLDOWN';
+  } else if (phase === 'blockRest') {
+    progressLine = 'BLOCK REST';
+  } else if (isTabata) {
     const totalSlots = isSimple ? 8 : (th.blocks[th.blockIdx]?.slots?.length || 8);
     const blockLabel = !isSimple && th.blocks[th.blockIdx] ? th.blocks[th.blockIdx].name : `Block ${th.blockIdx + 1}`;
     progressLine = `${blockLabel} · ${th.slotIdx + 1} OF ${totalSlots}`;
@@ -5996,7 +6058,7 @@ async function renderSettings() {
   <div class="card" style="margin-top:12px;">
     <div class="settings-row">
       <div class="settings-label">App Version</div>
-      <div style="color:var(--text-lo);font-size:14px;">STATIONS v3.6.1</div>
+      <div style="color:var(--text-lo);font-size:14px;">STATIONS v3.6.2</div>
     </div>
   </div>
 
